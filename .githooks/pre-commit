@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Blocks commits that contain obvious secrets. Bypass (if you are sure): git commit --no-verify
+set -u
+
+fail=0
+
+# 1. Files that should never be committed
+bad_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(^|/)\.env(\..*)?$|\.pem$|\.key$|id_rsa' | grep -vE '\.env\.example$')
+if [ -n "$bad_files" ]; then
+  echo "✖ Sensitive files staged:"
+  echo "$bad_files" | sed 's/^/    /'
+  fail=1
+fi
+
+# 2. Secret-looking strings in added lines only
+patterns=(
+  'sk-ant-[A-Za-z0-9_-]{20,}'                  # Anthropic API key
+  'sk-[A-Za-z0-9]{32,}'                        # OpenAI-style key
+  'AKIA[0-9A-Z]{16}'                           # AWS access key id
+  'gh[pousr]_[A-Za-z0-9]{36,}'                 # GitHub token
+  'xox[baprs]-[A-Za-z0-9-]{10,}'               # Slack token
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'         # private keys
+  "(api[_-]?key|secret|token|password)[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']{16,}[\"']"  # hardcoded assignment
+)
+
+added=$(git diff --cached -U0 --diff-filter=ACM --no-color | grep -E '^\+[^+]' )
+for p in "${patterns[@]}"; do
+  hits=$(echo "$added" | grep -inE -e "$p" || true)
+  if [ -n "$hits" ]; then
+    echo "✖ Possible secret matching /$p/:"
+    echo "$hits" | cut -c1-120 | sed 's/^/    /'
+    fail=1
+  fi
+done
+
+if [ $fail -ne 0 ]; then
+  echo
+  echo "Commit blocked. Remove the secret (use .env + process.env), or bypass with --no-verify."
+  exit 1
+fi
